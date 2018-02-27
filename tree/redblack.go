@@ -5,14 +5,17 @@ import (
 )
 
 type color bool
+type direction int
 
 const (
-	black, red color = true, false
+	black, red    color     = true, false
+	leftd, rightd direction = 0, 1
 )
 
 type RedBlackTree struct {
-	Root *Node
-	size int
+	Root       *Node
+	size       int
+	dirtyNodes []float32
 }
 
 type Node struct {
@@ -44,6 +47,10 @@ func (node *Node) Update(x float32, w float32) {
 	node.Mean += (x - node.Mean) * w / node.Weight
 }
 
+func (node *Node) Copy() *Node {
+	return NewNode(node.Mean, node.Weight, node.Color)
+}
+
 func NewRedBlackTree() *RedBlackTree {
 	return &RedBlackTree{
 		Root: nil,
@@ -51,8 +58,26 @@ func NewRedBlackTree() *RedBlackTree {
 	}
 }
 
+func (tree *RedBlackTree) First() *Node {
+	return tree.Root
+}
+
+func (tree *RedBlackTree) Set(node *Node, dir direction, child *Node) {
+	tree.addDirtyNodes(node.Mean)
+
+	if dir == leftd {
+		node.Left = child
+	} else {
+		node.Right = child
+	}
+}
+
+func (tree *RedBlackTree) addDirtyNodes(x float32) {
+	tree.dirtyNodes = append(tree.dirtyNodes, x)
+}
+
 func (tree *RedBlackTree) Insert(x float32, w float32) {
-	path := make([]*Node, 0)
+	tree.addDirtyNodes(x)
 
 	var insertedNode *Node
 	if tree.Root == nil {
@@ -63,7 +88,6 @@ func (tree *RedBlackTree) Insert(x float32, w float32) {
 		loop := true
 		for loop {
 			compare := x - node.Mean
-			path = append(path, node)
 			switch {
 			case compare == 0:
 				node.Update(x, w)
@@ -71,7 +95,6 @@ func (tree *RedBlackTree) Insert(x float32, w float32) {
 			case compare < 0:
 				if node.Left == nil {
 					node.Left = NewNode(x, w, red)
-					path = append(path, node.Left)
 					insertedNode = node.Left
 					loop = false
 				} else {
@@ -80,7 +103,6 @@ func (tree *RedBlackTree) Insert(x float32, w float32) {
 			case compare > 0:
 				if node.Right == nil {
 					node.Right = NewNode(x, w, red)
-					path = append(path, node.Right)
 					insertedNode = node.Right
 					loop = false
 				} else {
@@ -94,17 +116,14 @@ func (tree *RedBlackTree) Insert(x float32, w float32) {
 	tree.insertCase1(insertedNode)
 	tree.size++
 
-	tree.updateLowers(path)
+	//tree.updateDirtyNodes()
 }
 
 func (tree *RedBlackTree) Remove(x float32) {
-	path := make([]*Node, 0)
-
 	node := tree.Root
 loop:
 	for node != nil {
 		compare := x - node.Mean
-		path = append(path, node)
 		switch {
 		case compare == 0:
 			break loop
@@ -144,7 +163,15 @@ loop:
 	}
 	tree.size--
 
-	tree.updateLowers(path)
+	//tree.updateDirtyNodes()
+}
+
+func (tree *RedBlackTree) updateDirtyNodes() {
+	for _, mean := range tree.dirtyNodes {
+		path := tree.lookupPath(mean)
+		tree.updateLowers(path)
+	}
+	tree.dirtyNodes = tree.dirtyNodes[:0]
 }
 
 func (tree *RedBlackTree) updateLowers(path []*Node) {
@@ -184,22 +211,6 @@ func (tree *RedBlackTree) getFullWeights(node *Node) float32 {
 	} else {
 		return node.Lowers
 	}
-}
-
-func (tree *RedBlackTree) lookup(x float32) *Node {
-	node := tree.Root
-	for node != nil {
-		compare := x - node.Mean
-		switch {
-		case compare == 0:
-			return node
-		case compare < 0:
-			node = node.Left
-		case compare > 0:
-			node = node.Right
-		}
-	}
-	return nil
 }
 
 func (tree *RedBlackTree) lookupPath(x float32) []*Node {
@@ -247,6 +258,26 @@ func (tree *RedBlackTree) GetMax() *Node {
 		current = current.Right
 	}
 	return parent
+}
+
+func (tree *RedBlackTree) Neighbors(x float32) (*Node, *Node) {
+	var floor, ceiling *Node = nil, nil
+	node := tree.Root
+	for node != nil {
+		compare := x - node.Mean
+		switch {
+		case compare == 0:
+			return node, node
+		case compare < 0:
+			ceiling = node
+			node = node.Left
+		case compare > 0:
+			floor = node
+			node = node.Right
+		}
+	}
+
+	return floor, ceiling
 }
 
 func (tree *RedBlackTree) Floor(x float32) *Node {
@@ -359,22 +390,22 @@ func (node *Node) sibling() *Node {
 func (tree *RedBlackTree) rotateLeft(node *Node) {
 	right := node.Right
 	tree.replaceNode(node, right)
-	node.Right = right.Left
+	tree.Set(node, rightd, right.Left)
 	if right.Left != nil {
 		right.Left.Parent = node
 	}
-	right.Left = node
+	tree.Set(right, leftd, node)
 	node.Parent = right
 }
 
 func (tree *RedBlackTree) rotateRight(node *Node) {
 	left := node.Left
 	tree.replaceNode(node, left)
-	node.Left = left.Right
+	tree.Set(node, leftd, left.Right)
 	if left.Right != nil {
 		left.Right.Parent = node
 	}
-	left.Right = node
+	tree.Set(left, rightd, node)
 	node.Parent = left
 }
 
@@ -383,9 +414,9 @@ func (tree *RedBlackTree) replaceNode(old *Node, new *Node) {
 		tree.Root = new
 	} else {
 		if old == old.Parent.Left {
-			old.Parent.Left = new
+			tree.Set(old.Parent, leftd, new)
 		} else {
-			old.Parent.Right = new
+			tree.Set(old.Parent, rightd, new)
 		}
 	}
 	if new != nil {
